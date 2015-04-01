@@ -9,7 +9,7 @@ ZSKIPLIST_MAXLEVEL=32
 ZSKIPLIST_P=0.25
 REDIS_SHARED_INTEGERS = 10000
 
-MemoryRecord = namedtuple('MemoryRecord', ['database', 'type', 'key', 'bytes', 'encoding','size', 'len_largest_element'])
+MemoryRecord = namedtuple('MemoryRecord', ['database', 'type', 'key', 'bytes', 'encoding','size', 'len_largest_element', 'expiry'])
 
 class StatsAggregator():
     def __init__(self, key_groupings = None):
@@ -70,12 +70,12 @@ class StatsAggregator():
 class PrintAllKeys():
     def __init__(self, out):
         self._out = out
-        self._out.write("%s,%s,%s,%s,%s,%s,%s\n" % ("database", "type", "key", 
-                                                 "size_in_bytes", "encoding", "num_elements", "len_largest_element"))
+        self._out.write("%s,%s,%s,%s,%s,%s,%s,%s\n" % ("database", "type", "key", 
+                                                 "size_in_bytes", "encoding", "num_elements", "len_largest_element", "expiry"))
     
     def next_record(self, record) :
-        self._out.write("%d,%s,%s,%d,%s,%d,%d\n" % (record.database, record.type, encode_key(record.key), 
-                                                 record.bytes, record.encoding, record.size, record.len_largest_element))
+        self._out.write("%d,%s,%s,%d,%s,%d,%d,%s\n" % (record.database, record.type, encode_key(record.key), 
+                                                 record.bytes, record.encoding, record.size, record.len_largest_element, record.expiry))
     
 class MemoryCallback(RdbCallback):
     '''Calculates the memory used if this rdb file were loaded into RAM
@@ -88,6 +88,7 @@ class MemoryCallback(RdbCallback):
         self._current_encoding = None
         self._current_length = 0
         self._len_largest_element = 0
+	self._expiry = None
         
         if architecture == 64 or architecture == '64':
             self._pointer_size = 8
@@ -107,17 +108,19 @@ class MemoryCallback(RdbCallback):
         pass
        
     def set(self, key, value, expiry, info):
+	self._expiry = expiry
         self._current_encoding = info['encoding']
         size = self.sizeof_string(key) + self.sizeof_string(value) + self.top_level_object_overhead()
         size += 2*self.robj_overhead()
         size += self.key_expiry_overhead(expiry)
         
         length = element_length(value)
-        record = MemoryRecord(self._dbnum, "string", key, size, self._current_encoding, length, length)
+        record = MemoryRecord(self._dbnum, "string", key, size, self._current_encoding, length, length, self._expiry)
         self._stream.next_record(record)
         self.end_key()
     
     def start_hash(self, key, length, expiry, info):
+	self._expiry = expiry
         self._current_encoding = info['encoding']
         self._current_length = length        
         size = self.sizeof_string(key)
@@ -146,7 +149,7 @@ class MemoryCallback(RdbCallback):
             self._current_size += 2*self.robj_overhead()
     
     def end_hash(self, key):
-        record = MemoryRecord(self._dbnum, "hash", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element)
+        record = MemoryRecord(self._dbnum, "hash", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element, self._expiry)
         self._stream.next_record(record)
         self.end_key()
     
@@ -164,11 +167,12 @@ class MemoryCallback(RdbCallback):
             self._current_size += self.robj_overhead()
     
     def end_set(self, key):
-        record = MemoryRecord(self._dbnum, "set", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element)
+        record = MemoryRecord(self._dbnum, "set", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element, self._expiry)
         self._stream.next_record(record)
         self.end_key()
     
     def start_list(self, key, length, expiry, info):
+	self._expiry = expiry
         self._current_length = length
         self._current_encoding = info['encoding']
         size = self.sizeof_string(key)
@@ -194,11 +198,12 @@ class MemoryCallback(RdbCallback):
             self._current_size += self.robj_overhead()
     
     def end_list(self, key):
-        record = MemoryRecord(self._dbnum, "list", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element)
+        record = MemoryRecord(self._dbnum, "list", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element, self._expiry)
         self._stream.next_record(record)
         self.end_key()
     
     def start_sorted_set(self, key, length, expiry, info):
+	self._expiry = expiry
         self._current_length = length
         self._current_encoding = info['encoding']
         size = self.sizeof_string(key)
@@ -225,7 +230,7 @@ class MemoryCallback(RdbCallback):
             self._current_size += self.skiplist_entry_overhead()
     
     def end_sorted_set(self, key):
-        record = MemoryRecord(self._dbnum, "sortedset", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element)
+        record = MemoryRecord(self._dbnum, "sortedset", key, self._current_size, self._current_encoding, self._current_length, self._len_largest_element, self._expiry)
         self._stream.next_record(record)
         self.end_key()
         
